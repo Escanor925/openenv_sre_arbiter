@@ -1,0 +1,10 @@
+name: "cloud-sre-arbiter"
+version: "1.0.0"
+description: "A multi-step, RL-style environment testing an agent's ability to balance system uptime containment with root-cause investigation under severe financial constraints."
+tasks:
+  - name: "easy"
+    description: "Clear-cut deployment failures requiring immediate rollbacks."
+  - name: "medium"
+    description: "Cascading microservice failures stemming from a single obscured database lock."
+  - name: "hard"
+    description: "Ambiguous traffic spikes requiring investigation to distinguish between DDoS attacks and legitimate viral traffic."

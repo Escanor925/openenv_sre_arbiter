@@ -1,0 +1,50 @@
+{
+  "easy": [
+    {
+      "incident_id": "INC-001",
+      "active_alerts": ["Checkout_API_500", "High_Error_Rate"],
+      "system_metrics": {"cpu": "45%", "memory": "60%", "traffic": "normal"},
+      "hidden_data": {
+        "check_commit_diffs": "Merge commit 2 mins ago by dev_team: 'update payment gateway logic'. Syntax error on line 42.",
+        "analyze_ip_traffic": "Traffic is distributed normally.",
+        "query_db_locks": "0 active locks."
+      },
+      "ground_truth": {
+        "root_cause": "bad_code",
+        "ideal_containment": "rollback_last_deploy"
+      }
+    }
+  ],
+  "medium": [
+    {
+      "incident_id": "INC-002",
+      "active_alerts": ["Auth_Timeout_504", "DB_CPU_99%", "API_Gateway_502"],
+      "system_metrics": {"cpu": "99%", "memory": "85%", "traffic": "normal"},
+      "hidden_data": {
+        "check_commit_diffs": "No recent commits.",
+        "analyze_ip_traffic": "Normal distribution.",
+        "query_db_locks": "Massive deadlock detected on 'users' table originating from analytical query."
+      },
+      "ground_truth": {
+        "root_cause": "database_lock",
+        "ideal_containment": "scale_up_nodes"
+      }
+    }
+  ],
+  "hard": [
+    {
+      "incident_id": "INC-003",
+      "active_alerts": ["Latency_Spike_5000ms", "Ingress_Traffic_Warning"],
+      "system_metrics": {"cpu": "80%", "memory": "70%", "traffic": "400% above baseline"},
+      "hidden_data": {
+        "check_commit_diffs": "No recent commits.",
+        "analyze_ip_traffic": "95% of traffic is originating from known botnet IPs in a single foreign region.",
+        "query_db_locks": "0 active locks."
+      },
+      "ground_truth": {
+        "root_cause": "ddos_attack",
+        "ideal_containment": "rate_limit_all"
+      }
+    }
+  ]
+}
