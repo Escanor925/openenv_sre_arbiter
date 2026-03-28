@@ -5,9 +5,10 @@ Proves the environment works by driving an LLM through all three tasks
 (easy, medium, hard) via the HTTP API.
 
 Required environment variables:
-  API_BASE_URL  — LLM API endpoint (e.g. https://api-inference.huggingface.co/v1)
-  MODEL_NAME    — Model to use (e.g. meta-llama/Meta-Llama-3-8B-Instruct)
-  HF_TOKEN      — Hugging Face API token (or OpenAI API key)
+  NVIDIA_API_KEY — NVIDIA API catalog key (primary, runs Kimi 2.5 on cloud)
+  API_BASE_URL   — LLM API endpoint (default: NVIDIA API catalog)
+  MODEL_NAME     — Model to use (default: moonshotai/kimi-k2.5)
+  HF_TOKEN       — Fallback: HF token or OpenAI key
 """
 
 import os
@@ -23,12 +24,17 @@ from openai import OpenAI
 # ---------------------------------------------------------------------------
 
 ENV_API_URL = os.getenv("ENV_API_URL", "http://localhost:7860")  # our FastAPI server
-API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
-HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY", "")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://integrate.api.nvidia.com/v1")  # NVIDIA cloud API catalog
+MODEL_NAME = os.getenv("MODEL_NAME", "moonshotai/kimi-k2.5")
+HF_TOKEN = (
+    os.getenv("NVIDIA_API_KEY")
+    or os.getenv("KIMI_API_KEY")
+    or os.getenv("HF_TOKEN")
+    or os.getenv("OPENAI_API_KEY", "")
+)
 
 if not HF_TOKEN:
-    print("ERROR: Set HF_TOKEN or OPENAI_API_KEY environment variable.")
+    print("ERROR: Set NVIDIA_API_KEY (or KIMI_API_KEY / OPENAI_API_KEY) environment variable.")
     sys.exit(1)
 
 
@@ -51,7 +57,7 @@ You must make TWO decisions every turn:
 - If you do nothing, system health degrades each turn. The system can crash.
 
 ## Response Format
-Return ONLY a valid JSON object matching this exact schema:
+CRITICAL: Your entire response must be ONLY a raw JSON object. No markdown, no explanation, no code fences. Just the JSON object matching this exact schema:
 {
     "containment_action": "scale_up_nodes" | "rate_limit_all" | "rollback_last_deploy" | "do_nothing",
     "investigation_query": "analyze_ip_traffic" | "query_db_locks" | "check_commit_diffs" | "check_service_mesh" | "check_resource_utilization" | "none",
@@ -170,7 +176,13 @@ def run_evaluation():
         while not done:
             # Build the user message from the observation
             user_msg = format_observation(obs)
-            conversation.append({"role": "user", "content": user_msg})
+
+            # Keep only system prompt + current observation to avoid bloating context
+            # The observation already contains all state (health, budget, evidence)
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ]
 
             print(f"\n  Turn {obs['turn_number']} | Health: {obs['system_health']}% | Budget: ${obs['budget_spent']}")
 
@@ -178,12 +190,13 @@ def run_evaluation():
             try:
                 response = client.chat.completions.create(
                     model=MODEL_NAME,
-                    messages=conversation,
-                    response_format={"type": "json_object"},
+                    messages=messages,
                     temperature=0.0,
-                    max_tokens=500,
+                    max_tokens=4096,
                 )
                 raw_content = response.choices[0].message.content
+                if not raw_content:
+                    raise ValueError(f"LLM returned empty content. Finish reason: {response.choices[0].finish_reason}")
                 action_data = parse_llm_action(raw_content)
 
                 # Validate required fields
@@ -202,8 +215,7 @@ def run_evaluation():
                 print(f"  ├─ Root Cause:  {action_data['declare_root_cause']}")
                 print(f"  └─ Reason:      {action_data['justification'][:80]}")
 
-                # Add assistant response to conversation for context
-                conversation.append({"role": "assistant", "content": raw_content})
+                # No need to track conversation — each turn gets full state in the observation
 
             except Exception as exc:
                 print(f"  ⚠️  LLM error: {exc}")
