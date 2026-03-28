@@ -1,73 +1,261 @@
+"""
+Cloud SRE Arbiter — Inference / Evaluation Script
+===================================================
+Proves the environment works by driving an LLM through all three tasks
+(easy, medium, hard) via the HTTP API.
+
+Required environment variables:
+  API_BASE_URL  — LLM API endpoint (e.g. https://api-inference.huggingface.co/v1)
+  MODEL_NAME    — Model to use (e.g. meta-llama/Meta-Llama-3-8B-Instruct)
+  HF_TOKEN      — Hugging Face API token (or OpenAI API key)
+"""
 
 import os
+import sys
 import json
+import time
+import requests
 from openai import OpenAI
-from environment import CloudSREEnv, Action
+
+
+# ---------------------------------------------------------------------------
+# CONFIG (strictly from env vars — no hardcoded keys)
+# ---------------------------------------------------------------------------
+
+ENV_API_URL = os.getenv("ENV_API_URL", "http://localhost:7860")  # our FastAPI server
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
+HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY", "")
+
+if not HF_TOKEN:
+    print("ERROR: Set HF_TOKEN or OPENAI_API_KEY environment variable.")
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# SYSTEM PROMPT — gives the LLM its SRE persona and the rules
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT = """You are a Tier-1 Site Reliability Engineer (SRE) responding to a live production incident.
+
+## Your Mission
+You must make TWO decisions every turn:
+1. **Containment (Ops):** Take an immediate action to keep the system online.
+2. **Investigation (Sec/Data):** Run a diagnostic query to find the root cause.
+
+## Rules
+- Do NOT guess the root cause until you have gathered evidence via investigation queries.
+- Set `declare_root_cause` to "unknown" while you are still investigating.
+- Once you have enough evidence, declare the root cause to resolve the incident.
+- Every action costs money. Be efficient — unnecessary spending lowers your score.
+- If you do nothing, system health degrades each turn. The system can crash.
+
+## Response Format
+Return ONLY a valid JSON object matching this exact schema:
+{
+    "containment_action": "scale_up_nodes" | "rate_limit_all" | "rollback_last_deploy" | "do_nothing",
+    "investigation_query": "analyze_ip_traffic" | "query_db_locks" | "check_commit_diffs" | "check_service_mesh" | "check_resource_utilization" | "none",
+    "declare_root_cause": "ddos_attack" | "viral_traffic" | "bad_code" | "database_lock" | "unknown",
+    "justification": "Brief explanation citing evidence you have gathered so far"
+}
+
+## Strategy
+Turn 1-2: Focus on containment to stabilize the system AND run investigation queries.
+Turn 3+: Once you have evidence, declare the root cause.
+Do NOT declare a root cause on turn 1 unless the evidence is absolutely conclusive."""
+
+
+# ---------------------------------------------------------------------------
+# HELPERS
+# ---------------------------------------------------------------------------
+
+def format_observation(obs: dict) -> str:
+    """Convert an observation dict into a human-readable prompt for the LLM."""
+    lines = [
+        f"## Incident: {obs['incident_id']} (Severity: {obs['severity']})",
+        f"**Situation:** {obs['initial_observation']}",
+        "",
+        f"### Active Alerts ({len(obs['active_alerts'])})",
+    ]
+    for alert in obs["active_alerts"]:
+        lines.append(f"  - 🚨 {alert}")
+
+    lines.append("\n### System Metrics")
+    for k, v in obs["system_metrics"].items():
+        lines.append(f"  - {k}: {v}")
+
+    lines.append(f"\n### System Health: {obs['system_health']}% | Budget Spent: ${obs['budget_spent']}")
+    lines.append(f"### Turn: {obs['turn_number']} | Turns Remaining: {obs['turns_remaining']}")
+
+    if obs.get("timeline"):
+        lines.append("\n### Timeline")
+        for event in obs["timeline"]:
+            lines.append(f"  - {event}")
+
+    if obs.get("investigation_results"):
+        lines.append("\n### 🔍 Investigation Results (Evidence Gathered)")
+        for query, result in obs["investigation_results"].items():
+            lines.append(f"  **{query}:** {result}")
+    else:
+        lines.append("\n### 🔍 Investigation Results: None yet — run queries to gather evidence!")
+
+    return "\n".join(lines)
+
+
+def call_env_reset(task_name: str) -> dict:
+    """POST /reset to the environment API."""
+    resp = requests.post(
+        f"{ENV_API_URL}/reset",
+        json={"task_name": task_name},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def call_env_step(action: dict) -> dict:
+    """POST /step to the environment API."""
+    resp = requests.post(
+        f"{ENV_API_URL}/step",
+        json=action,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def parse_llm_action(content: str) -> dict:
+    """
+    Extract a JSON action from the LLM response.
+    Handles cases where the LLM wraps JSON in markdown code fences.
+    """
+    text = content.strip()
+    # Strip markdown code fences if present
+    if text.startswith("```"):
+        lines = text.split("\n")
+        # Remove first and last lines (the fences)
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        text = "\n".join(lines).strip()
+
+    return json.loads(text)
+
+
+# ---------------------------------------------------------------------------
+# MAIN EVALUATION LOOP
+# ---------------------------------------------------------------------------
 
 def run_evaluation():
-    # Strictly adheres to the hackathon requirements for env vars
-    api_key = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY", "dummy_key")
-    base_url = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
-    model_name = os.getenv("MODEL_NAME", "gpt-4o-mini") # Change to whatever model your team is using
-
-    client = OpenAI(api_key=api_key, base_url=base_url)
-    env = CloudSREEnv(data_path="data.json")
-
+    """Drive the LLM through all three tasks and report scores."""
+    client = OpenAI(api_key=HF_TOKEN, base_url=API_BASE_URL)
     tasks = ["easy", "medium", "hard"]
-    
-    print(f"Starting OpenEnv SRE Evaluation with model: {model_name}\n" + "="*50)
+    results = {}
+
+    print("=" * 70)
+    print("  CLOUD SRE ARBITER — EVALUATION RUN")
+    print(f"  Model: {MODEL_NAME}")
+    print(f"  Environment: {ENV_API_URL}")
+    print("=" * 70)
 
     for task in tasks:
-        obs = env.reset(task_name=task)
-        done = False
-        
-        print(f"\n[ TASK: {task.upper()} ]")
-        
-        # The Multi-Step 'Contain & Investigate' Loop
-        while not done:
-            print(f"  Turn {obs.turn_number} | Budget Spent: ${obs.budget_spent}")
-            
-            prompt = f"""
-            You are a Tier-1 SRE. Review the current system state and take action.
-            
-            Current Observation:
-            - Active Alerts: {obs.active_alerts}
-            - System Metrics: {obs.system_metrics}
-            - Investigation Results (Clues): {obs.investigation_results}
-            
-            Return a JSON object matching this schema exactly. 
-            If you need more info, set declare_root_cause to "unknown" and pick an investigation_query.
-            If you know the issue, declare it to end the incident.
-            
-            {{
-                "containment_action": "scale_up_nodes" | "rate_limit_all" | "rollback_last_deploy" | "do_nothing",
-                "investigation_query": "analyze_ip_traffic" | "query_db_locks" | "check_commit_diffs" | "none",
-                "declare_root_cause": "ddos_attack" | "viral_traffic" | "bad_code" | "database_lock" | "unknown",
-                "justification": "string"
-            }}
-            """
+        print(f"\n{'─' * 70}")
+        print(f"  📋 TASK: {task.upper()}")
+        print(f"{'─' * 70}")
 
+        # Reset the environment
+        reset_data = call_env_reset(task)
+        obs = reset_data["observation"]
+        done = False
+        conversation = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+        while not done:
+            # Build the user message from the observation
+            user_msg = format_observation(obs)
+            conversation.append({"role": "user", "content": user_msg})
+
+            print(f"\n  Turn {obs['turn_number']} | Health: {obs['system_health']}% | Budget: ${obs['budget_spent']}")
+
+            # Call the LLM
             try:
                 response = client.chat.completions.create(
-                    model=model_name,
-                    messages=[{"role": "user", "content": prompt}],
+                    model=MODEL_NAME,
+                    messages=conversation,
                     response_format={"type": "json_object"},
-                    temperature=0.0 # Deterministic behavior for evaluation
+                    temperature=0.0,
+                    max_tokens=500,
                 )
-                
-                action_data = json.loads(response.choices[0].message.content)
-                action = Action(**action_data)
-                
-                print(f"  AI Action -> Contain: {action.containment_action} | Investigate: {action.investigation_query} | Root Cause: {action.declare_root_cause}")
-                
-                obs, reward, done, info = env.step(action)
-                
+                raw_content = response.choices[0].message.content
+                action_data = parse_llm_action(raw_content)
+
+                # Validate required fields
+                required_fields = [
+                    "containment_action",
+                    "investigation_query",
+                    "declare_root_cause",
+                    "justification",
+                ]
+                for field in required_fields:
+                    if field not in action_data:
+                        raise ValueError(f"Missing required field: {field}")
+
+                print(f"  ├─ Contain:     {action_data['containment_action']}")
+                print(f"  ├─ Investigate: {action_data['investigation_query']}")
+                print(f"  ├─ Root Cause:  {action_data['declare_root_cause']}")
+                print(f"  └─ Reason:      {action_data['justification'][:80]}")
+
+                # Add assistant response to conversation for context
+                conversation.append({"role": "assistant", "content": raw_content})
+
+            except Exception as exc:
+                print(f"  ⚠️  LLM error: {exc}")
+                # Fallback: investigate and do nothing
+                action_data = {
+                    "containment_action": "do_nothing",
+                    "investigation_query": "check_commit_diffs",
+                    "declare_root_cause": "unknown",
+                    "justification": f"LLM error fallback: {exc}",
+                }
+
+            # Send to environment
+            try:
+                step_data = call_env_step(action_data)
+                done = step_data["done"]
+
                 if done:
-                    print(f"  -> Incident Resolved. Final Score: {reward.total_score} | Breakdown: {reward.breakdown}")
-                
-            except Exception as e:
-                print(f"  Error processing turn. Make sure your API keys are set! Error details: {e}")
-                break
+                    reward = step_data["reward"]
+                    score = reward["total_score"]
+                    results[task] = score
+                    print(f"\n  ✅ INCIDENT RESOLVED — Score: {score}")
+                    print(f"  📊 Breakdown:")
+                    for k, v in reward["breakdown"].items():
+                        print(f"     {k}: {v}")
+                else:
+                    obs = step_data["observation"]
+
+            except Exception as exc:
+                print(f"  ❌ Environment step error: {exc}")
+                results[task] = 0.0
+                done = True
+
+        time.sleep(0.5)  # brief pause between tasks
+
+    # --- FINAL SUMMARY ---
+    print(f"\n{'=' * 70}")
+    print("  📋 FINAL RESULTS")
+    print(f"{'=' * 70}")
+    total = 0.0
+    for task in tasks:
+        score = results.get(task, 0.0)
+        total += score
+        bar = "█" * int(score * 20) + "░" * (20 - int(score * 20))
+        print(f"  {task.upper():8s}  {bar}  {score:.2f}")
+
+    avg = total / len(tasks) if tasks else 0.0
+    print(f"{'─' * 70}")
+    print(f"  AVERAGE SCORE: {avg:.2f}")
+    print(f"{'=' * 70}")
+
+    return results
+
 
 if __name__ == "__main__":
     run_evaluation()

@@ -1,10 +1,87 @@
+# OpenEnv Environment Specification
+# Cloud SRE Arbiter — Evaluate an AI agent's ability to diagnose & mitigate
+# live server outages using the "Contain & Investigate" paradigm.
+
 name: "cloud-sre-arbiter"
 version: "1.0.0"
-description: "A multi-step, RL-style environment testing an agent's ability to balance system uptime containment with root-cause investigation under severe financial constraints."
+description: >
+  A multi-step, RL-style environment that tests an AI agent's ability to
+  balance system-uptime containment with root-cause investigation under
+  severe financial constraints. The agent faces realistic alert storms and
+  must simultaneously take ops actions (scale, rollback, rate-limit) while
+  running investigative queries to find the true root cause — all before
+  the system crashes or the budget runs out.
+
+author:
+  name: "SRE Arbiter Team"
+  email: "sre-arbiter@openenv.dev"
+
+# Dockerised entry point
+entrypoint:
+  type: "docker"
+  dockerfile: "Dockerfile"
+  port: 7860
+
+# API endpoints (FastAPI)
+api:
+  health: "GET /"
+  reset: "POST /reset"
+  step: "POST /step"
+  state: "GET /state"
+
+# Pydantic schema locations
+schemas:
+  observation: "environment.py::Observation"
+  action: "environment.py::Action"
+  reward: "environment.py::Reward"
+  state: "environment.py::State"
+
+# Task definitions (easy / medium / hard)
 tasks:
   - name: "easy"
-    description: "Clear-cut deployment failures requiring immediate rollbacks."
+    description: >
+      A clear-cut bad code deployment causing API 500 errors on the
+      checkout service. Requires identifying the faulty commit and
+      performing a rollback.
+    expected_turns: 2
+    max_score: 1.0
+
   - name: "medium"
-    description: "Cascading microservice failures stemming from a single obscured database lock."
+    description: >
+      Cascading microservice failures originating from a single massive
+      database deadlock on the users table. The agent must look past
+      surface-level symptoms to find the lock.
+    expected_turns: 3
+    max_score: 1.0
+
   - name: "hard"
-    description: "Ambiguous traffic spikes requiring investigation to distinguish between DDoS attacks and legitimate viral traffic."
+    description: >
+      An ambiguous traffic spike that mixes legitimate viral traffic (5%)
+      with a coordinated DDoS attack (95%). The agent must investigate
+      IP traffic patterns to distinguish the two and choose rate-limiting
+      over scaling — which would waste budget without stopping the attack.
+    expected_turns: 4
+    max_score: 1.0
+
+# Grading methodology
+grading:
+  type: "deterministic"
+  range: [0.0, 1.0]
+  weights:
+    root_cause_identification: 0.40
+    containment_quality: 0.25
+    evidence_gathering: 0.15
+    budget_efficiency: 0.10
+    system_health_maintenance: 0.10
+  penalties:
+    premature_guess_without_evidence: -0.30
+    system_crash: -0.50
+
+# Evaluation script
+evaluation:
+  script: "inference.py"
+  timeout_minutes: 20
+  env_vars:
+    - "API_BASE_URL"
+    - "MODEL_NAME"
+    - "HF_TOKEN"
