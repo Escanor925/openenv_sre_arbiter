@@ -5,8 +5,12 @@ Serves the OpenEnv-compliant HTTP API with /reset, /step, and /state
 endpoints.  The GET / health-check is required by automated judges.
 """
 
+import os
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 
@@ -77,7 +81,7 @@ class StepResponse(BaseModel):
 # ENDPOINTS
 # ---------------------------------------------------------------------------
 
-@app.get("/", tags=["health"])
+@app.get("/health", tags=["health"])
 def health_check():
     """Automated judges ping this to verify the container is alive."""
     return {
@@ -135,3 +139,30 @@ def get_state():
         return env.get_state().model_dump()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"State query failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# FRONTEND UI ROUTING
+# ---------------------------------------------------------------------------
+
+_dist_path = os.path.join(os.path.dirname(__file__), "sre_frontend_dist")
+
+if os.path.exists(_dist_path):
+    app.mount(
+        "/assets",
+        StaticFiles(directory=os.path.join(_dist_path, "assets")),
+        name="assets",
+    )
+
+    @app.get("/")
+    def serve_frontend():
+        """Serve the React SRE Command Center UI."""
+        return FileResponse(os.path.join(_dist_path, "index.html"))
+
+    @app.get("/favicon.svg")
+    def serve_favicon():
+        return FileResponse(os.path.join(_dist_path, "favicon.svg"))
+
+    @app.get("/icons.svg")
+    def serve_icons():
+        return FileResponse(os.path.join(_dist_path, "icons.svg"))
