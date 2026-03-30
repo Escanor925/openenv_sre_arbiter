@@ -6,12 +6,14 @@ endpoints.  The GET / health-check is required by automated judges.
 """
 
 import os
+import re
+import json
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from typing import Optional, Dict, Any
 from openai import OpenAI
 
@@ -22,6 +24,66 @@ from environment import (
     Reward,
     State,
 )
+
+# ---------------------------------------------------------------------------
+# LLM JSON SANITIZER
+# ---------------------------------------------------------------------------
+
+# Fallback values when the LLM returns an invalid enum value
+_VALID_CONTAINMENT = {"scale_up_nodes", "rate_limit_all", "rollback_last_deploy", "do_nothing"}
+_VALID_INVESTIGATION = {"analyze_ip_traffic", "query_db_locks", "check_commit_diffs", "check_service_mesh", "check_resource_utilization", "none"}
+_VALID_ROOT_CAUSE = {"ddos_attack", "viral_traffic", "bad_code", "database_lock", "unknown"}
+
+
+def clean_llm_json(raw_text: str) -> dict:
+    """
+    Extract a JSON object from raw LLM output that may contain markdown
+    fences, conversational filler, or other non-JSON text.
+
+    Returns a sanitized dict with guaranteed valid Action enum values.
+    Raises ValueError with the raw text logged if parsing fails entirely.
+    """
+    text = (raw_text or "").strip()
+
+    if not text:
+        raise ValueError("LLM returned empty content")
+
+    # 1. Try to extract JSON from ```json ... ``` or ``` ... ``` fences
+    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
+    if fence_match:
+        text = fence_match.group(1).strip()
+    else:
+        # 2. Strip leading/trailing non-JSON conversational text
+        #    Find the first { and last } to extract the JSON object
+        brace_start = text.find("{")
+        brace_end = text.rfind("}")
+        if brace_start != -1 and brace_end > brace_start:
+            text = text[brace_start : brace_end + 1]
+
+    # 3. Parse
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        print(f"[AUTOPILOT] JSON parse failed. Raw LLM output:\n---\n{raw_text}\n---")
+        raise ValueError(f"Failed to parse LLM JSON: {exc}") from exc
+
+    if not isinstance(parsed, dict):
+        print(f"[AUTOPILOT] LLM returned non-object JSON: {type(parsed)}")
+        raise ValueError(f"Expected JSON object, got {type(parsed).__name__}")
+
+    # 4. Sanitize enum values — fall back to safe defaults if LLM hallucinated
+    containment = parsed.get("containment_action", "do_nothing")
+    investigation = parsed.get("investigation_query", "none")
+    root_cause = parsed.get("declare_root_cause", "unknown")
+    justification = parsed.get("justification", "")
+
+    return {
+        "containment_action": containment if containment in _VALID_CONTAINMENT else "do_nothing",
+        "investigation_query": investigation if investigation in _VALID_INVESTIGATION else "none",
+        "declare_root_cause": root_cause if root_cause in _VALID_ROOT_CAUSE else "unknown",
+        "justification": justification.strip() if isinstance(justification, str) and justification.strip() else "AI agent could not provide justification.",
+    }
+
 
 # ---------------------------------------------------------------------------
 # APP SETUP
@@ -155,8 +217,10 @@ def get_state():
 def autopilot(req: AutoPilotRequest):
     """
     Server-side LLM proxy for the dashboard Auto-Pilot flow.
-    Avoids browser-side CORS/provider restrictions by calling the model here.
+    Calls the LLM, sanitizes the JSON response, validates against
+    the Action schema, and returns a clean action dict to the frontend.
     """
+    # 1. Call the LLM
     try:
         client = OpenAI(api_key=req.api_key, base_url=req.base_url)
         response = client.chat.completions.create(
@@ -168,15 +232,23 @@ def autopilot(req: AutoPilotRequest):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM upstream call failed: {exc}")
 
+    # 2. Extract raw content
     try:
-        content = response.choices[0].message.content
-    except Exception as exc:
+        raw_content = response.choices[0].message.content or ""
+    except (IndexError, AttributeError) as exc:
         raise HTTPException(status_code=502, detail=f"Malformed LLM response: {exc}")
 
-    if not content:
-        raise HTTPException(status_code=502, detail="LLM returned empty content")
+    print(f"[AUTOPILOT] Raw LLM response ({len(raw_content)} chars): {raw_content[:300]}")
 
-    return {"content": content}
+    # 3. Sanitize and parse JSON
+    try:
+        action = clean_llm_json(raw_content)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=f"LLM JSON parsing failed: {exc}")
+
+    # 4. Return the cleaned action as a JSON content envelope
+    #    (frontend expects { content: "<json string>" })
+    return {"content": json.dumps(action)}
 
 
 # ---------------------------------------------------------------------------
