@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
+from openai import OpenAI
 
 from environment import (
     CloudSREEnv,
@@ -77,6 +78,15 @@ class StepResponse(BaseModel):
     state: dict
 
 
+class AutoPilotRequest(BaseModel):
+    api_key: str = Field(..., min_length=1, description="Provider API key (e.g., nvapi-...)")
+    model: str = Field("nvidia/nemotron-3-super-120b-a12b", min_length=1)
+    base_url: str = Field("https://integrate.api.nvidia.com/v1", min_length=1)
+    messages: list[dict]
+    temperature: float = Field(0.3, ge=0.0, le=2.0)
+    max_tokens: int = Field(512, ge=1, le=4096)
+
+
 # ---------------------------------------------------------------------------
 # ENDPOINTS
 # ---------------------------------------------------------------------------
@@ -139,6 +149,34 @@ def get_state():
         return env.get_state().model_dump()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"State query failed: {exc}")
+
+
+@app.post("/autopilot", tags=["llm"])
+def autopilot(req: AutoPilotRequest):
+    """
+    Server-side LLM proxy for the dashboard Auto-Pilot flow.
+    Avoids browser-side CORS/provider restrictions by calling the model here.
+    """
+    try:
+        client = OpenAI(api_key=req.api_key, base_url=req.base_url)
+        response = client.chat.completions.create(
+            model=req.model,
+            messages=req.messages,
+            temperature=req.temperature,
+            max_tokens=req.max_tokens,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM upstream call failed: {exc}")
+
+    try:
+        content = response.choices[0].message.content
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Malformed LLM response: {exc}")
+
+    if not content:
+        raise HTTPException(status_code=502, detail="LLM returned empty content")
+
+    return {"content": content}
 
 
 # ---------------------------------------------------------------------------
