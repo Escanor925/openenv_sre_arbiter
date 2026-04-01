@@ -1,5 +1,3 @@
-/** Mirrors backend Pydantic schemas from environment.py */
-
 export type TaskName = 'easy' | 'medium' | 'hard';
 
 export type ContainmentAction =
@@ -92,43 +90,26 @@ export interface StepResponse {
   state: EpisodeState;
 }
 
+export interface ChatMessage {
+  role: 'user' | 'system' | 'assistant';
+  content: string;
+}
+
 export interface AutopilotResponse {
   content: string;
 }
 
-/** Cost constants matching environment.py */
-export const CONTAINMENT_COSTS: Record<ContainmentAction, number> = {
-  scale_up_nodes: 500,
-  rate_limit_all: 100,
-  rollback_last_deploy: 200,
-  do_nothing: 0,
-};
+export interface FeedEntry {
+  id: string;
+  source: 'system' | 'alert' | 'ai' | 'user' | 'error';
+  message: string;
+  at: string;
+}
 
-export const INVESTIGATION_COST = 50;
-export const MAX_BUDGET = 5000;
-export const MAX_TURNS = 6;
-
-/** Display labels */
-export const CONTAINMENT_LABELS: Record<ContainmentAction, string> = {
-  scale_up_nodes: 'Scale Up Nodes',
-  rate_limit_all: 'Rate Limit All',
-  rollback_last_deploy: 'Rollback Deploy',
-  do_nothing: 'Do Nothing',
-};
-
-export const INVESTIGATION_LABELS: Record<InvestigationQuery, string> = {
-  analyze_ip_traffic: 'Analyze IP Traffic',
-  query_db_locks: 'Query DB Locks',
-  check_commit_diffs: 'Check Commit Diffs',
-  check_service_mesh: 'Check Service Mesh',
-  check_resource_utilization: 'Check Resources',
-  none: 'None',
-};
-
-export const ROOT_CAUSE_LABELS: Record<RootCause, string> = {
-  ddos_attack: 'DDoS Attack',
-  viral_traffic: 'Viral Traffic',
-  bad_code: 'Bad Code Deploy',
-  database_lock: 'Database Lock',
-  unknown: 'Unknown (Investigating)',
-};
+export interface TelemetryPoint {
+  turn: number;
+  cpu: number;
+  memory: number;
+  network: number;
+  disk: number;
+}

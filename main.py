@@ -13,16 +13,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, ValidationError
-from typing import Optional, Dict, Any
+from pydantic import BaseModel, Field
+from typing import Optional
 from openai import OpenAI
 
 from environment import (
     CloudSREEnv,
     Action,
-    Observation,
-    Reward,
-    State,
 )
 
 # ---------------------------------------------------------------------------
@@ -133,9 +130,27 @@ app = FastAPI(
     version="1.0.0",
 )
 
+_default_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:7860",
+    "http://127.0.0.1:7860",
+]
+_space_host = os.environ.get("SPACE_HOST")
+if _space_host:
+    _default_origins.append(f"https://{_space_host}")
+
+_allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "")
+_allowed_origins = [origin.strip() for origin in _allowed_origins_env.split(",") if origin.strip()]
+if not _allowed_origins:
+    _allowed_origins = _default_origins
+
+_allowed_autopilot_base_url = os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
+_allowed_autopilot_model = os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -175,7 +190,6 @@ class StepResponse(BaseModel):
 
 
 class AutoPilotRequest(BaseModel):
-    api_key: str = Field(..., min_length=1, description="Provider API key (e.g., nvapi-...)")
     model: str = Field("nvidia/nemotron-3-super-120b-a12b", min_length=1)
     base_url: str = Field("https://integrate.api.nvidia.com/v1", min_length=1)
     messages: list[dict]
@@ -256,7 +270,26 @@ def autopilot(req: AutoPilotRequest):
     """
     # 1. Call the LLM
     try:
-        client = OpenAI(api_key=req.api_key, base_url=req.base_url)
+        if req.base_url != _allowed_autopilot_base_url:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported base_url. Use {_allowed_autopilot_base_url}.",
+            )
+
+        if req.model != _allowed_autopilot_model:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported model. Use {_allowed_autopilot_model}.",
+            )
+
+        api_key = os.environ.get("NVIDIA_API_KEY")
+        if not api_key:
+            raise HTTPException(
+                status_code=500,
+                detail="Server misconfiguration: NVIDIA_API_KEY is not set.",
+            )
+
+        client = OpenAI(api_key=api_key, base_url=req.base_url)
         truncation_guard_prompt = (
             "CRITICAL: YOUR OUTPUT IS BEING TRUNCATED BY SERVER LIMITS. "
             "THE 'justification' FIELD MUST BE EXTREMELY BRIEF. MAXIMUM 10 WORDS. "
@@ -269,6 +302,8 @@ def autopilot(req: AutoPilotRequest):
             temperature=req.temperature,
             max_tokens=max(1500, req.max_tokens),
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM upstream call failed: {exc}")
 
@@ -310,24 +345,21 @@ def autopilot(req: AutoPilotRequest):
 # FRONTEND UI ROUTING
 # ---------------------------------------------------------------------------
 
-_dist_path = os.path.join(os.path.dirname(__file__), "sre_frontend_dist")
+_ui_dir = os.path.join(os.path.dirname(__file__), "dist")
+if os.path.exists(_ui_dir):
+    app.mount("/assets", StaticFiles(directory=os.path.join(_ui_dir, "assets")), name="assets")
+    _ui_root = os.path.abspath(_ui_dir)
+    _post_only_endpoints = {"reset", "step", "autopilot"}
 
-if os.path.exists(_dist_path):
-    app.mount(
-        "/assets",
-        StaticFiles(directory=os.path.join(_dist_path, "assets")),
-        name="assets",
-    )
+    @app.get("/{full_path:path}")
+    def serve_frontend(full_path: str):
+        if full_path in _post_only_endpoints:
+            raise HTTPException(status_code=405, detail="Method Not Allowed")
 
-    @app.get("/")
-    def serve_frontend():
-        """Serve the React SRE Command Center UI."""
-        return FileResponse(os.path.join(_dist_path, "index.html"))
+        normalized = os.path.normpath(full_path).lstrip("\\/")
+        path = os.path.abspath(os.path.join(_ui_root, normalized))
 
-    @app.get("/favicon.svg")
-    def serve_favicon():
-        return FileResponse(os.path.join(_dist_path, "favicon.svg"))
+        if path != _ui_root and not path.startswith(_ui_root + os.sep):
+            return FileResponse(os.path.join(_ui_dir, "index.html"))
 
-    @app.get("/icons.svg")
-    def serve_icons():
-        return FileResponse(os.path.join(_dist_path, "icons.svg"))
+        return FileResponse(path) if os.path.exists(path) and os.path.isfile(path) else FileResponse(os.path.join(_ui_dir, "index.html"))

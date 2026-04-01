@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type CSSProperties } from 'react';
 import {
   LineChart,
   Line,
@@ -20,7 +20,7 @@ interface TelemetryGridProps {
 interface MetricConfig {
   key: string;
   label: string;
-  icon: React.ComponentType<{ className?: string }>;
+  icon: React.ComponentType<{ className?: string; style?: CSSProperties }>;
   color: string;
   extractValue: (obs: Observation) => number;
 }

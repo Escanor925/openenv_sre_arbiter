@@ -182,10 +182,11 @@ We integrated **NVIDIA's `nemotron-3-super-120b-a12b`** — a massive 120-billio
 
 ```python
 # We use the OpenAI-compatible client pointed at NVIDIA's Partner API
+import os
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="nvapi-...",
+  api_key=os.environ.get("NVIDIA_API_KEY"),
     base_url="https://integrate.api.nvidia.com/v1"
 )
 
@@ -297,8 +298,8 @@ A **dark-mode React dashboard** statically mounted to the FastAPI server — no 
 | 🔴 **Live Incident Feed** | Real-time display of active alerts, system metrics, and event timeline |
 | 💰 **Budget Tracker** | Visual progress bar showing spend vs. $5,000 ceiling |
 | ❤️ **System Health Gauge** | Animated health indicator with color-coded severity (green → yellow → red) |
-| 🤖 **Auto-Pilot Button** | One-click LLM inference — enter your API key, press go, watch the agent think |
-| 🔑 **Secure API Key Input** | Client-side key entry — keys are sent per-request, never stored on server |
+| 🤖 **Auto-Pilot Button** | One-click LLM inference powered by server-managed NVIDIA credentials |
+| 🔑 **Server-Side Secret Handling** | `NVIDIA_API_KEY` is read from environment variables and never exposed in browser payloads |
 | 📊 **Score Breakdown** | End-of-episode grading with per-category scores and penalty explanations |
 
 ### How Auto-Pilot Works
@@ -307,7 +308,7 @@ A **dark-mode React dashboard** statically mounted to the FastAPI server — no 
   Browser                    FastAPI                     NVIDIA API
     │                           │                            │
     │  POST /autopilot          │                            │
-    │  { api_key, messages }    │                            │
+    │  { messages }             │                            │
     │ ─────────────────────────▶│                            │
     │                           │  POST /chat/completions    │
     │                           │ ──────────────────────────▶│
@@ -331,7 +332,7 @@ A **dark-mode React dashboard** statically mounted to the FastAPI server — no 
     │ ◀─────────────────────────│                            │
 ```
 
-The API key never touches server storage — it's forwarded in-memory to NVIDIA's API and discarded after the response.
+The API key is loaded server-side from `NVIDIA_API_KEY` and is never sent from or exposed to the browser.
 
 ---
 
@@ -443,7 +444,7 @@ uvicorn main:app --host 0.0.0.0 --port 7860 --reload
 
 ```bash
 # Set your API key
-export NEMOTRON_API_KEY=nvapi-your-key-here
+export NVIDIA_API_KEY=nvapi-your-key-here
 
 # Optional: override model and endpoint
 export MODEL_NAME=nvidia/nemotron-3-super-120b-a12b
@@ -595,12 +596,11 @@ Query current episode metadata without advancing the turn.
 
 ### `POST /autopilot`
 
-Server-side LLM proxy — the frontend sends the API key and conversation; the backend calls Nemotron, heals the JSON, and returns a validated action.
+Server-side LLM proxy — the frontend sends conversation context; the backend reads `NVIDIA_API_KEY` from environment, calls Nemotron, heals the JSON, and returns a validated action.
 
 ```json
 // Request
 {
-  "api_key": "nvapi-...",
   "model": "nvidia/nemotron-3-super-120b-a12b",
   "base_url": "https://integrate.api.nvidia.com/v1",
   "messages": [ { "role": "system", "content": "..." }, ... ],
