@@ -38,34 +38,68 @@ _VALID_ROOT_CAUSE = {"ddos_attack", "viral_traffic", "bad_code", "database_lock"
 def clean_llm_json(raw_text: str) -> dict:
     """
     Extract a JSON object from raw LLM output that may contain markdown
-    fences, conversational filler, or other non-JSON text.
+    fences, conversational filler, or truncation artifacts.
 
-    Returns a sanitized dict with guaranteed valid Action enum values.
-    Raises ValueError with the raw text logged if parsing fails entirely.
+    Returns a sanitized dict with guaranteed valid Action enum values,
+    including a truncation-healer fallback for broken justification fields.
     """
     text = (raw_text or "").strip()
 
     if not text:
         raise ValueError("LLM returned empty content")
 
-    # 1. Try to extract JSON from ```json ... ``` or ``` ... ``` fences
-    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
+    # 1) Strip markdown fences if present.
+    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL | re.IGNORECASE)
     if fence_match:
         text = fence_match.group(1).strip()
-    else:
-        # 2. Strip leading/trailing non-JSON conversational text
-        #    Find the first { and last } to extract the JSON object
-        brace_start = text.find("{")
-        brace_end = text.rfind("}")
-        if brace_start != -1 and brace_end > brace_start:
-            text = text[brace_start : brace_end + 1]
 
-    # 3. Parse
+    # 2) Isolate probable JSON object boundaries.
+    brace_start = text.find("{")
+    if brace_start != -1:
+        brace_end = text.rfind("}")
+        text = text[brace_start : brace_end + 1] if brace_end > brace_start else text[brace_start:]
+
+    def _extract_field(source: str, key: str, default: str) -> str:
+        match = re.search(rf'"{re.escape(key)}"\s*:\s*"([^"]*)"', source)
+        if not match:
+            return default
+        value = match.group(1).strip()
+        return value if value else default
+
+    # 3) First parse attempt.
     try:
         parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
-        print(f"[AUTOPILOT] JSON parse failed. Raw LLM output:\n---\n{raw_text}\n---")
-        raise ValueError(f"Failed to parse LLM JSON: {exc}") from exc
+    except json.JSONDecodeError:
+        parsed = None
+
+        # 4) Healer fallback: if justification is truncated, replace it with safe text.
+        marker = '"justification"'
+        marker_index = text.find(marker)
+        if marker_index != -1:
+            prefix = text[:marker_index].rstrip()
+            if prefix.endswith(","):
+                prefix = prefix[:-1].rstrip()
+            if "{" in prefix:
+                prefix = prefix[prefix.find("{"):]
+            else:
+                prefix = "{"
+
+            healed_text = f'{prefix}{"" if prefix.endswith("{") else ", "}"justification": "Truncated by API constraints."}}'
+            try:
+                parsed = json.loads(healed_text)
+                print("[AUTOPILOT] Applied JSON healer fallback for truncated justification field.")
+            except json.JSONDecodeError:
+                parsed = None
+
+        # 5) Last-resort extraction so Auto-Pilot does not hard-crash on malformed text.
+        if parsed is None:
+            parsed = {
+                "containment_action": _extract_field(text, "containment_action", "do_nothing"),
+                "investigation_query": _extract_field(text, "investigation_query", "none"),
+                "declare_root_cause": _extract_field(text, "declare_root_cause", "unknown"),
+                "justification": "Truncated by API constraints.",
+            }
+            print("[AUTOPILOT] JSON parse failed; using regex extraction fallback.")
 
     if not isinstance(parsed, dict):
         print(f"[AUTOPILOT] LLM returned non-object JSON: {type(parsed)}")
@@ -223,20 +257,41 @@ def autopilot(req: AutoPilotRequest):
     # 1. Call the LLM
     try:
         client = OpenAI(api_key=req.api_key, base_url=req.base_url)
+        truncation_guard_prompt = (
+            "CRITICAL: YOUR OUTPUT IS BEING TRUNCATED BY SERVER LIMITS. "
+            "THE 'justification' FIELD MUST BE EXTREMELY BRIEF. MAXIMUM 10 WORDS. "
+            "DO NOT WRITE LONG SENTENCES OR YOUR OUTPUT WILL CORRUPT."
+        )
+        llm_messages = [{"role": "system", "content": truncation_guard_prompt}, *req.messages]
         response = client.chat.completions.create(
             model=req.model,
-            messages=req.messages,
+            messages=llm_messages,
             temperature=req.temperature,
-            max_tokens=req.max_tokens,
+            max_tokens=max(1500, req.max_tokens),
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM upstream call failed: {exc}")
 
-    # 2. Extract raw content
+    # 2. Extract raw content and inspect finish_reason safety net
     try:
-        raw_content = response.choices[0].message.content or ""
-    except (IndexError, AttributeError) as exc:
+        choice = response.choices[0]
+        raw_content = choice.message.content or ""
+        finish_reason = (choice.finish_reason or "").lower()
+    except (IndexError, AttributeError, TypeError) as exc:
         raise HTTPException(status_code=502, detail=f"Malformed LLM response: {exc}")
+
+    if finish_reason == "length":
+        print("\n" + "=" * 96)
+        print("CRITICAL: LLM OUTPUT WAS TRUNCATED DUE TO TOKEN LIMITS! (finish_reason=length)")
+        print("CRITICAL: Auto-Pilot aborted before JSON parsing to prevent invalid-action execution.")
+        print("=" * 96 + "\n")
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Auto-Pilot failed: model output was truncated because it ran out of tokens "
+                "(finish_reason=length). Increase token budget and retry."
+            ),
+        )
 
     print(f"[AUTOPILOT] Raw LLM response ({len(raw_content)} chars): {raw_content[:300]}")
 

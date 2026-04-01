@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+/*
+ * SRE Command Center — Dark-mode-first theme
+ * Custom properties via Tailwind v4 @theme
+ */
+@theme {
+  /* Base palette */
+  --color-sre-bg: #0a0e17;
+  --color-sre-surface: #111827;
+  --color-sre-surface-alt: #1a2234;
+  --color-sre-border: #1e293b;
+  --color-sre-border-bright: #334155;
+
+  /* Text */
+  --color-sre-text: #94a3b8;
+  --color-sre-text-bright: #e2e8f0;
+  --color-sre-text-muted: #64748b;
+
+  /* Accent — Cyber blue */
+  --color-sre-accent: #38bdf8;
+  --color-sre-accent-dim: rgba(56, 189, 248, 0.15);
+
+  /* Semantic status */
+  --color-sre-green: #22c55e;
+  --color-sre-green-dim: rgba(34, 197, 94, 0.15);
+  --color-sre-yellow: #eab308;
+  --color-sre-yellow-dim: rgba(234, 179, 8, 0.15);
+  --color-sre-orange: #f97316;
+  --color-sre-orange-dim: rgba(249, 115, 22, 0.15);
+  --color-sre-red: #ef4444;
+  --color-sre-red-dim: rgba(239, 68, 68, 0.15);
+  --color-sre-purple: #a855f7;
+  --color-sre-purple-dim: rgba(168, 85, 247, 0.15);
+
+  /* Fonts */
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+
+  /* Animation */
+  --animate-pulse-glow: pulse-glow 2s ease-in-out infinite;
+  --animate-slide-up: slide-up 0.3s ease-out;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Base resets */
+body {
+  margin: 0;
+  background: var(--color-sre-bg);
+  color: var(--color-sre-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-sre-border-bright);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-sre-text-muted);
+}
+
+/* Utility for terminal-style text */
+.font-mono {
+  font-family: var(--font-mono);
+}
