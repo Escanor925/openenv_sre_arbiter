@@ -23,6 +23,8 @@ export type RootCause =
   | 'database_lock'
   | 'unknown';
 
+export type AutopilotPhase = 'idle' | 'thinking' | 'filling' | 'submitting';
+
 export interface Action {
   containment_action: ContainmentAction;
   investigation_query: InvestigationQuery;

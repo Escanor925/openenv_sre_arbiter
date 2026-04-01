@@ -93,9 +93,10 @@ export function DashboardLayout() {
           <ActionConsole
             onSubmit={episode.step}
             onAutopilot={episode.autopilot}
+            onSetAutopilotPhase={episode.setAutopilotPhase}
             onReset={episode.reset}
             isLoading={episode.isLoading}
-            isAutopiloting={episode.isAutopiloting}
+            autopilotPhase={episode.autopilotPhase}
             isDone={episode.isDone}
             hasEpisode={hasEpisode}
           />
