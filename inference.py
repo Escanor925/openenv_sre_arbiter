@@ -11,6 +11,7 @@ Required environment variables:
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -23,15 +24,16 @@ from openai import OpenAI
 # ---------------------------------------------------------------------------
 
 ENV_API_URL = os.getenv("ENV_API_URL", "http://localhost:7860")
-NEMOTRON_BASE_URL = os.getenv(
-    "NEMOTRON_BASE_URL",
+NEMOTRON_BASE_URL = os.getenv("API_BASE_URL") or os.getenv(
+    "NVIDIA_BASE_URL",
     "https://integrate.api.nvidia.com/v1",
 )
-MODEL_NAME = os.getenv("MODEL_NAME", "nvidia/nemotron-3-super-120b-a12b")
+MODEL_NAME = os.getenv("MODEL_NAME") or os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b")
 NEMOTRON_API_KEY = (
-    os.getenv("NEMOTRON_API_KEY")
+    os.getenv("OPENAI_API_KEY")
+    or os.getenv("HF_TOKEN")
     or os.getenv("NVIDIA_API_KEY")
-    or os.getenv("HF_TOKEN", "")
+    or ""
 )
 
 if not NEMOTRON_API_KEY:
@@ -141,18 +143,46 @@ def call_env_step(action: dict) -> dict:
     return resp.json()
 
 
+_SAFE_FALLBACK: dict = {
+    "containment_action": "do_nothing",
+    "investigation_query": "none",
+    "declare_root_cause": "unknown",
+    "justification": "JSON parse failed",
+}
+
+
+def _strip_markdown_fences(text: str) -> str:
+    """Remove ```json / ``` wrappers and any surrounding prose."""
+    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        return fence_match.group(1).strip()
+    return text
+
+
 def parse_llm_action(content: str) -> dict:
     """
     Extract a JSON action from the LLM response.
-    Handles cases where the LLM wraps JSON in markdown code fences.
+    Strips markdown fences, isolates the JSON object, and returns a safe
+    fallback dict if parsing is unrecoverable.
     """
-    text = content.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        text = "\n".join(lines).strip()
+    text = _strip_markdown_fences((content or "").strip())
 
-    return json.loads(text)
+    # Isolate the outermost { ... } if surrounded by conversational text
+    brace_start = text.find("{")
+    if brace_start != -1:
+        brace_end = text.rfind("}")
+        if brace_end > brace_start:
+            text = text[brace_start : brace_end + 1]
+
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    print(f"  [PARSE] JSON unrecoverable, using safe fallback. Raw ({len(content)} chars): {content[:200]}")
+    return dict(_SAFE_FALLBACK)
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +228,7 @@ def run_evaluation():
                     model=MODEL_NAME,
                     messages=messages,
                     temperature=0.0,
-                    max_tokens=512,
+                    max_tokens=1024,
                 )
                 raw_content = response.choices[0].message.content
                 if not raw_content:

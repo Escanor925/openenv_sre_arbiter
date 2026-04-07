@@ -145,8 +145,8 @@ _allowed_origins = [origin.strip() for origin in _allowed_origins_env.split(",")
 if not _allowed_origins:
     _allowed_origins = _default_origins
 
-_allowed_autopilot_base_url = os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
-_allowed_autopilot_model = os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b")
+_allowed_autopilot_base_url = os.environ.get("API_BASE_URL") or os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
+_allowed_autopilot_model = os.environ.get("MODEL_NAME") or os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b")
 
 app.add_middleware(
     CORSMiddleware,
@@ -200,6 +200,12 @@ class AutoPilotRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # ENDPOINTS
 # ---------------------------------------------------------------------------
+
+@app.get("/", tags=["health"])
+def root_health():
+    """Root health check for automated judge pings."""
+    return {"status": "ok"}
+
 
 @app.get("/health", tags=["health"])
 def health_check():
@@ -282,11 +288,11 @@ def autopilot(req: AutoPilotRequest):
                 detail=f"Unsupported model. Use {_allowed_autopilot_model}.",
             )
 
-        api_key = os.environ.get("NVIDIA_API_KEY")
+        api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("HF_TOKEN") or os.environ.get("NVIDIA_API_KEY")
         if not api_key:
             raise HTTPException(
                 status_code=500,
-                detail="Server misconfiguration: NVIDIA_API_KEY is not set.",
+                detail="Server misconfiguration: no API key found. Set OPENAI_API_KEY, HF_TOKEN, or NVIDIA_API_KEY.",
             )
 
         client = OpenAI(api_key=api_key, base_url=req.base_url)
