@@ -1,0 +1,132 @@
+{
+  "easy": [
+    {
+      "incident_id": "INC-001",
+      "severity": "P2",
+      "initial_observation": "ALERT STORM: Checkout API returning HTTP 500 errors. Error rate spiked from 0.1% to 34% in the last 3 minutes. Customer-facing payment flow is broken.",
+      "active_alerts": [
+        "Checkout_API_500_Spike",
+        "High_Error_Rate_34pct",
+        "PagerDuty_P2_Triggered"
+      ],
+      "system_metrics": {
+        "cpu": "45%",
+        "memory": "60%",
+        "disk_io": "normal",
+        "network": "stable",
+        "error_rate": "34%",
+        "p99_latency_ms": "1200",
+        "traffic_rps": "850",
+        "active_connections": "320"
+      },
+      "timeline": [
+        "T-5m: CI/CD pipeline completed deploy #4821",
+        "T-3m: Error rate began climbing",
+        "T-1m: PagerDuty P2 alert fired",
+        "T-0m: You are paged"
+      ],
+      "hidden_data": {
+        "check_commit_diffs": "Deploy #4821 merged 5 minutes ago by dev_team. Commit message: 'update payment gateway logic'. Diff shows a syntax error on line 42 of payment_handler.py — missing await on async database call causing unhandled promise rejection.",
+        "analyze_ip_traffic": "Traffic distribution is normal. 92% domestic, 8% international. No anomalous IP patterns detected. Request distribution matches historical baseline.",
+        "query_db_locks": "0 active locks. Database is healthy. Connection pool utilization at 15%. All replicas in sync.",
+        "check_service_mesh": "Service mesh shows checkout-service returning 500s. Upstream dependencies (auth, inventory) are healthy. The error originates within the checkout-service itself.",
+        "check_resource_utilization": "All pods running within normal resource limits. No OOM kills. No CPU throttling detected."
+      },
+      "ground_truth": {
+        "root_cause": "bad_code",
+        "ideal_containment": "rollback_last_deploy",
+        "required_evidence": ["check_commit_diffs"],
+        "explanation": "A bad code deployment introduced a syntax error in the payment handler, causing 500 errors on the checkout API."
+      }
+    }
+  ],
+  "medium": [
+    {
+      "incident_id": "INC-002",
+      "severity": "P1",
+      "initial_observation": "ALERT STORM: Multiple services failing. Auth service returning 504 timeouts. API Gateway returning 502 errors. Database CPU at 99%. Cascading failures detected across 4 microservices.",
+      "active_alerts": [
+        "Auth_Service_Timeout_504",
+        "DB_Primary_CPU_99pct",
+        "API_Gateway_502_Errors",
+        "Cache_Miss_Rate_High",
+        "Downstream_Service_Degraded"
+      ],
+      "system_metrics": {
+        "cpu": "99%",
+        "memory": "85%",
+        "disk_io": "high",
+        "network": "congested",
+        "error_rate": "62%",
+        "p99_latency_ms": "15000",
+        "traffic_rps": "900",
+        "active_connections": "4800"
+      },
+      "timeline": [
+        "T-15m: Analytics team started a large batch query",
+        "T-8m: Database CPU began climbing",
+        "T-4m: Auth service timeouts began",
+        "T-2m: Cascading 502 errors across API gateway",
+        "T-0m: Full alert storm — you are paged"
+      ],
+      "hidden_data": {
+        "check_commit_diffs": "No code deployments in the last 24 hours. Last deploy was a documentation update 2 days ago.",
+        "analyze_ip_traffic": "Traffic volume is within normal range. No DDoS indicators. Geographic distribution matches baseline. No suspicious IPs flagged.",
+        "query_db_locks": "CRITICAL: Massive deadlock detected on 'users' table. A long-running analytical query (SELECT * FROM users JOIN orders JOIN transactions — full table scan) has been holding a row-level lock for 12 minutes, blocking 847 pending write transactions. Lock holder: analytics_service_worker_03. Lock wait queue depth: 847.",
+        "check_service_mesh": "Service dependency graph shows all failures cascade from the auth-service, which depends on the users table. Auth -> Users DB (blocked) -> API Gateway (timeout) -> All downstream services (502).",
+        "check_resource_utilization": "Database primary instance at 99% CPU. Read replicas are healthy but cannot serve the blocked write transactions. Connection pool exhausted — 4800/5000 connections active."
+      },
+      "ground_truth": {
+        "root_cause": "database_lock",
+        "ideal_containment": "scale_up_nodes",
+        "required_evidence": ["query_db_locks"],
+        "explanation": "A long-running analytical query on the users table created a massive deadlock, blocking 847 write transactions and causing cascading failures across all services that depend on auth."
+      }
+    }
+  ],
+  "hard": [
+    {
+      "incident_id": "INC-003",
+      "severity": "P1",
+      "initial_observation": "ALERT STORM: Latency spiked 5000%. Ingress traffic 400% above baseline. System under extreme load. Origin of traffic is ambiguous — could be DDoS attack or legitimate viral event. CEO is asking if we are under attack. Make the wrong call and you either block real customers or leave the system vulnerable.",
+      "active_alerts": [
+        "Latency_Spike_5000pct",
+        "Ingress_Traffic_400pct_Above_Baseline",
+        "Auto_Scaler_Max_Capacity",
+        "WAF_Anomaly_Detected",
+        "CDN_Cache_Hit_Rate_Dropping"
+      ],
+      "system_metrics": {
+        "cpu": "92%",
+        "memory": "78%",
+        "disk_io": "elevated",
+        "network": "saturated",
+        "error_rate": "28%",
+        "p99_latency_ms": "25000",
+        "traffic_rps": "12500",
+        "active_connections": "9800"
+      },
+      "timeline": [
+        "T-20m: Social media post about our product went viral",
+        "T-12m: Traffic began climbing steadily",
+        "T-5m: Traffic spiked sharply — pattern changed",
+        "T-3m: WAF flagged anomalous request patterns",
+        "T-1m: Auto-scaler hit maximum capacity",
+        "T-0m: Full alert storm — you are paged"
+      ],
+      "hidden_data": {
+        "check_commit_diffs": "No recent deployments. Last deploy was a feature flag update 6 hours ago. No code changes.",
+        "analyze_ip_traffic": "CRITICAL FINDING: Traffic analysis reveals two distinct patterns. 1) Legitimate traffic (5% of volume): Organic users from diverse global IPs with normal session behavior and referrer headers from social media. 2) Attack traffic (95% of volume): Massive bot fleet from 12,000+ IPs concentrated in a single foreign region (Eastern Europe). All requests target the /api/products endpoint with identical User-Agent strings, no cookies, and no referrer headers. IP reputation check: 94% match known botnet C2 infrastructure.",
+        "query_db_locks": "No active locks. Database is healthy but under heavy read load from the traffic surge. Query response times elevated but no deadlocks.",
+        "check_service_mesh": "All services are healthy but saturated. The bottleneck is pure ingress volume overwhelming the load balancer. No internal service failures — this is an external traffic problem.",
+        "check_resource_utilization": "Auto-scaler has provisioned maximum allowed instances (50/50). All instances at 90%+ CPU. Further horizontal scaling requires manual infrastructure changes. Current capacity will be exhausted in approximately 8 minutes at this rate."
+      },
+      "ground_truth": {
+        "root_cause": "ddos_attack",
+        "ideal_containment": "rate_limit_all",
+        "required_evidence": ["analyze_ip_traffic"],
+        "explanation": "While a viral social media event is generating some legitimate traffic (5%), 95% of the traffic is a coordinated DDoS attack from a botnet. The attack is using the viral event as cover. Rate limiting is the correct containment to block bot traffic while preserving legitimate user access."
+      }
+    }
+  ]
+}
