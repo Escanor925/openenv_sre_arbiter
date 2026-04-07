@@ -218,13 +218,14 @@ def health_check():
 
 
 @app.post("/reset", response_model=ResetResponse, tags=["environment"])
-def reset_env(req: ResetRequest):
+def reset_env(req: Optional[ResetRequest] = None):
     """
     Initialize a new episode for the given task difficulty and return the
     first Observation the agent will see.
     """
     try:
-        obs = env.reset(req.task_name)
+        task_name = req.task_name if req is not None else "easy"
+        obs = env.reset(task_name)
         return ResetResponse(
             status=200,
             observation=obs.model_dump(),
