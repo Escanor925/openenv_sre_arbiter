@@ -73,7 +73,7 @@ class Action(BaseModel):
 
 class Reward(BaseModel):
     """Deterministic grading result returned after each step."""
-    total_score: float = Field(..., ge=0.0, le=1.0, description="Final score 0.0–1.0")
+    total_score: float = Field(..., gt=0.0, lt=1.0, description="Final score in (0, 1) exclusive")
     breakdown: Dict[str, float] = Field(..., description="Score breakdown by category")
 
 
@@ -228,7 +228,7 @@ class CloudSREEnv:
         self._health = max(0.0, self._health - 5.0)
 
         reward = Reward(
-            total_score=0.0,
+            total_score=0.001,
             breakdown={
                 "status": 0.0,
                 "message_investigating": 0.0,
@@ -335,7 +335,7 @@ class CloudSREEnv:
             breakdown["penalty_system_crash"] = -SYSTEM_CRASH_PENALTY
 
         raw = sum(v for k, v in breakdown.items() if not k.startswith("penalty_"))
-        total = max(0.0, min(1.0, round(raw - penalty, 4)))
+        total = max(0.001, min(0.999, round(raw - penalty, 4)))
 
         breakdown["budget_spent"] = self._budget
         breakdown["final_health"] = self._health

@@ -269,7 +269,7 @@ def run_evaluation():
 
                 if done:
                     reward = step_data["reward"]
-                    score = reward["total_score"]
+                    score = max(0.001, min(0.999, float(reward["total_score"])))
                     results[task] = score
                     print(f"[STEP] step={obs['turn_number']} reward={score}", flush=True)
                     print(f"[END] task={task} score={score} steps={obs['turn_number']}", flush=True)
@@ -282,10 +282,10 @@ def run_evaluation():
                     obs = step_data["observation"]
 
             except Exception as exc:
-                print(f"[STEP] step={obs['turn_number']} reward=0.0", flush=True)
-                print(f"[END] task={task} score=0.0 steps={obs['turn_number']}", flush=True)
+                print(f"[STEP] step={obs['turn_number']} reward=0.001", flush=True)
+                print(f"[END] task={task} score=0.001 steps={obs['turn_number']}", flush=True)
                 print(f"  ERROR: Environment step failed: {exc}")
-                results[task] = 0.0
+                results[task] = 0.001
                 done = True
 
         time.sleep(0.5)
