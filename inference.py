@@ -211,6 +211,8 @@ def run_evaluation():
         obs = reset_data["observation"]
         done = False
 
+        print(f"[START] task={task}", flush=True)
+
         while not done:
             user_msg = format_observation(obs)
 
@@ -269,14 +271,19 @@ def run_evaluation():
                     reward = step_data["reward"]
                     score = reward["total_score"]
                     results[task] = score
+                    print(f"[STEP] step={obs['turn_number']} reward={score}", flush=True)
+                    print(f"[END] task={task} score={score} steps={obs['turn_number']}", flush=True)
                     print(f"\n  RESOLVED — Score: {score}")
                     print(f"  Breakdown:")
                     for k, v in reward["breakdown"].items():
                         print(f"     {k}: {v}")
                 else:
+                    print(f"[STEP] step={obs['turn_number']} reward=0.0", flush=True)
                     obs = step_data["observation"]
 
             except Exception as exc:
+                print(f"[STEP] step={obs['turn_number']} reward=0.0", flush=True)
+                print(f"[END] task={task} score=0.0 steps={obs['turn_number']}", flush=True)
                 print(f"  ERROR: Environment step failed: {exc}")
                 results[task] = 0.0
                 done = True
